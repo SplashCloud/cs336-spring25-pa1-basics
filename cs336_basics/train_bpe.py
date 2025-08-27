@@ -1,5 +1,7 @@
 import regex as re
 import multiprocessing
+import os
+from typing import BinaryIO
 
 OPTIMIZATION = True
 
@@ -135,12 +137,15 @@ class BPETrainer:
         self.init_vocab_with_special_tokens(special_tokens)
         escaped_special_tokens = [re.escape(st) for st in special_tokens]
         delimiter = "|".join(escaped_special_tokens)
-        with open(input_path, "r") as f:
-            content = f.read() # TODO(read by chunk)
-            chunks = re.split(delimiter, content)
+        with open(input_path, "rb") as f:
+            chunks = 100
+            chunk_boundaries = self.split_into_chunks(f, chunks, b"<|endoftext|>")
+            args = []
+            for start, end in zip(chunk_boundaries[:-1], chunk_boundaries[1:]):
+                args.append((input_path, delimiter, start, end))
             nproc = multiprocessing.cpu_count()
             with multiprocessing.Pool(processes=nproc) as pool:
-                results = pool.map(per_tokenization_task, chunks)
+                results = pool.starmap(per_tokenization_task, args)
                 self.per_tokenization(results)
         self.merges = []
         self.init_bpe_state()
@@ -148,6 +153,29 @@ class BPETrainer:
             self.merge_most_freq_bp()
             self.update_bpe_state()
         return self.vocab, self.merges
+    
+
+    def split_into_chunks(self, file: BinaryIO, chunks: int, special_token: bytes) -> list[int]:
+        file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        file.seek(0)
+        chunk_size = file_size // chunks
+        chunk_boundaries = [i * chunk_size for i in range(chunks)]
+        chunk_boundaries.append(file_size)
+        block_size = 4096
+        for i in range(1, len(chunk_boundaries)):
+            init_bound = chunk_boundaries[i]
+            file.seek(init_bound)
+            while True:
+                content = file.read(block_size)
+                if content == b"":
+                    chunk_boundaries[i] = file_size
+                    break
+                found_at = content.find(special_token)
+                if found_at != -1:
+                    chunk_boundaries[i] = init_bound + found_at
+                init_bound += block_size
+        return sorted(set(chunk_boundaries))
 
 
 '''
@@ -157,19 +185,24 @@ merge => overlap bp => every bp from different contexts
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
-def per_tokenization_task(chunk: str) -> dict[tuple[bytes], int]:
-    iter = re.finditer(PAT, chunk)
-    token_freq: dict[str, int] = {}
-    byte_seq_freq: dict[tuple[bytes], int] = {}
-    for i in iter:
-        text = i.group()
-        if text not in token_freq.keys():
-            token_freq[text] = 0
-        token_freq[text] += 1
-    for token, cnt in token_freq.items():
-        byte_seq = tuple(bytes([b]) for b in list(token.encode()))
-        byte_seq_freq[byte_seq] = cnt
-    return byte_seq_freq
+def per_tokenization_task(file: str, delimiter: str, chunk_begin_offset: int, chunk_end_offset: int) -> dict[tuple[bytes], int]:
+    with open(file, "rb") as f:
+        f.seek(chunk_begin_offset)
+        chunk = f.read(chunk_end_offset - chunk_begin_offset).decode(encoding="utf-8", errors="ignore")
+        small_chunks = re.split(delimiter, chunk)
+        token_freq: dict[str, int] = {}
+        for sc in small_chunks:
+            iter = re.finditer(PAT, sc)
+            for i in iter:
+                text = i.group()
+                if text not in token_freq.keys():
+                    token_freq[text] = 0
+                token_freq[text] += 1
+        byte_seq_freq: dict[tuple[bytes], int] = {}
+        for token, cnt in token_freq.items():
+            byte_seq = tuple(bytes([b]) for b in list(token.encode()))
+            byte_seq_freq[byte_seq] = cnt
+        return byte_seq_freq
 
 
 def vocab_init(special_tokens: list[str]) -> dict[int, bytes]:
@@ -274,19 +307,15 @@ def run_fast(input_path: str,
 
 
 if __name__ == "__main__":
-    corpus = "tests/fixtures/tinystories_sample_5M.txt"
+    corpus = "data/TinyStoriesV2-GPT4-train.txt"
     import time
     begin = time.time()
-    vocab1, merges1 = run(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])
+    # vocab1, merges1 = run(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])
     mid = time.time()
-    vocab2, merges2 = run_fast(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])
+    vocab2, merges2 = run_fast(input_path=corpus, max_vocab_size=10000, special_tokens=["<|endoftext|>"])
     end = time.time()
     print(f'Naive Run cost {(mid - begin):.3f}')
     print(f'Optimized Run cost {(end - mid):.3f}')
-    assert len(merges1) == len(merges2)
-    for i in range(len(merges1)):
-        if merges1[i] != merges2[i]:
-            print(f'{i}: merges1={merges1[i]}, merges2={merges2[i]}')
 
 
     
