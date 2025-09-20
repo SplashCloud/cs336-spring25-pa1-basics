@@ -2,6 +2,15 @@ import regex as re
 import multiprocessing
 import os
 from typing import BinaryIO
+import json
+from tqdm import tqdm
+import logging
+
+logger = logging.getLogger(name='train_bpe')
+logger.setLevel(level=logging.DEBUG)
+file_handler = logging.FileHandler(filename="bpe.log", mode='w')
+file_handler.setLevel(level=logging.DEBUG)
+logger.addHandler(file_handler)
 
 OPTIMIZATION = True
 
@@ -24,11 +33,11 @@ class BPETrainer:
     
     def init_vocab_with_special_tokens(self, special_tokens: list[str]):
         for st in special_tokens:
-            self.vocab[self.vocab_size] = st.encode()
+            self.vocab[self.vocab_size] = st.encode(encoding="utf-8")
             self.vocab_size += 1
 
 
-    def per_tokenization(self, byte_seq_freq_list: list[dict[tuple[bytes], int]]):
+    def merge_bytes_seq(self, byte_seq_freq_list: list[dict[tuple[bytes], int]]):
         for byte_seq_freq in byte_seq_freq_list:
             for byte_seq, cnt in byte_seq_freq.items():
                 if byte_seq not in self.bs2id.keys():
@@ -42,7 +51,7 @@ class BPETrainer:
 
 
     def init_bpe_state(self):
-        for bs_id, cnt in self.bs_freq.items():
+        for bs_id, cnt in tqdm(self.bs_freq.items()):
             bs = self.id2bs[bs_id]
             for i in range(len(bs)-1):
                 bp = (bs[i], bs[i+1],)
@@ -134,24 +143,31 @@ class BPETrainer:
 
 
     def train(self, input_path: str, max_vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+        logger.debug("Begin BPE training...")
         self.init_vocab_with_special_tokens(special_tokens)
         escaped_special_tokens = [re.escape(st) for st in special_tokens]
         delimiter = "|".join(escaped_special_tokens)
         with open(input_path, "rb") as f:
             chunks = 100
             chunk_boundaries = self.split_into_chunks(f, chunks, b"<|endoftext|>")
+            logger.debug(f"Split the raw data into {len(chunk_boundaries)-1} chunks firstly.")
             args = []
             for start, end in zip(chunk_boundaries[:-1], chunk_boundaries[1:]):
                 args.append((input_path, delimiter, start, end))
             nproc = multiprocessing.cpu_count()
+            logger.debug(f"Current machine has {nproc} process cores.")
             with multiprocessing.Pool(processes=nproc) as pool:
                 results = pool.starmap(per_tokenization_task, args)
-                self.per_tokenization(results)
+                self.merge_bytes_seq(results)
+        logger.debug("Per-tokenization has done...")
         self.merges = []
         self.init_bpe_state()
-        while self.vocab_size < max_vocab_size:
-            self.merge_most_freq_bp()
-            self.update_bpe_state()
+        logger.debug("Begin merging...")
+        with tqdm(initial=self.vocab_size, total=max_vocab_size, desc="Processing") as pbar:
+            while self.vocab_size < max_vocab_size:
+                self.merge_most_freq_bp()
+                self.update_bpe_state()
+                pbar.update(1)
         return self.vocab, self.merges
     
 
@@ -174,13 +190,9 @@ class BPETrainer:
                 found_at = content.find(special_token)
                 if found_at != -1:
                     chunk_boundaries[i] = init_bound + found_at
+                    break
                 init_bound += block_size
         return sorted(set(chunk_boundaries))
-
-
-'''
-merge => overlap bp => every bp from different contexts
-'''
 
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -200,7 +212,7 @@ def per_tokenization_task(file: str, delimiter: str, chunk_begin_offset: int, ch
                 token_freq[text] += 1
         byte_seq_freq: dict[tuple[bytes], int] = {}
         for token, cnt in token_freq.items():
-            byte_seq = tuple(bytes([b]) for b in list(token.encode()))
+            byte_seq = tuple(bytes([b]) for b in list(token.encode(encoding="utf-8")))
             byte_seq_freq[byte_seq] = cnt
         return byte_seq_freq
 
@@ -211,7 +223,7 @@ def vocab_init(special_tokens: list[str]) -> dict[int, bytes]:
     for i in range(vocab_size):
         vocab[i] = bytes([i])
     for st in special_tokens:
-        vocab[vocab_size] = bytes(st.encode())
+        vocab[vocab_size] = bytes(st.encode(encoding="utf-8"))
         vocab_size += 1
     return vocab
 
@@ -306,16 +318,31 @@ def run_fast(input_path: str,
     return trainer.train(input_path=input_path, max_vocab_size=max_vocab_size, special_tokens=special_tokens)
 
 
+def save_results(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], corpus_name: str):
+    from tests.common import gpt2_bytes_to_unicode
+    decoder = gpt2_bytes_to_unicode()
+    vocab0: dict[str, int] = {}
+    for id, token in vocab.items():
+        s = "".join([decoder[t] for t in token])
+        vocab0[s] = id
+    try:
+        with open(f"{corpus_name}_vocab.json", 'w') as f:
+            json.dump(vocab0, f, indent=4, ensure_ascii=False)
+        with open(f"{corpus_name}_merges.txt", "w") as f:
+            for merge in merges:
+                f.write(f'{merge[0]} {merge[1]}\n')
+    except Exception as e:
+        print(f'Error when saving results: {e}')
+
+
 if __name__ == "__main__":
-    corpus = "data/TinyStoriesV2-GPT4-train.txt"
+    corpus = "owt_train"
     import time
     begin = time.time()
     # vocab1, merges1 = run(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])
     mid = time.time()
-    vocab2, merges2 = run_fast(input_path=corpus, max_vocab_size=10000, special_tokens=["<|endoftext|>"])
+    vocab2, merges2 = run_fast(input_path=f"data/{corpus}.txt", max_vocab_size=32000, special_tokens=["<|endoftext|>"])
     end = time.time()
     print(f'Naive Run cost {(mid - begin):.3f}')
     print(f'Optimized Run cost {(end - mid):.3f}')
-
-
-    
+    save_results(vocab2, merges2, corpus_name=corpus)

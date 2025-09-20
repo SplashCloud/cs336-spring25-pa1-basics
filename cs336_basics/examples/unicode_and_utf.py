@@ -4,6 +4,7 @@
 unicode = ord('牛')
 print(unicode)
 print(chr(unicode))
+print('牛'.encode(encoding='utf-8'))
 
 # UFT-8
 # encode the code point of Unicode into a byte sequence
