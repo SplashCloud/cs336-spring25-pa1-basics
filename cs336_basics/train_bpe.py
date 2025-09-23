@@ -23,7 +23,7 @@ class BPETrainer:
         self.unique_bs = 0 # unchanged
         self.bs_freq: dict[int, int] = {} # unchanged
         self.bp_freq: dict[tuple[bytes, bytes], int] = {}
-        self.bp_occurence: dict[tuple[bytes, bytes], list[int]] = {}
+        self.bp_occurence: dict[tuple[bytes, bytes], set[int]] = {}
         # initialize the vocab
         self.vocab_size = 256
         self.vocab: dict[int, bytes] = {}
@@ -59,9 +59,9 @@ class BPETrainer:
                     self.bp_freq[bp] = 0
                 self.bp_freq[bp] += cnt
                 if bp not in self.bp_occurence.keys():
-                    self.bp_occurence[bp] = []
+                    self.bp_occurence[bp] = set()
                 if bs_id not in self.bp_occurence[bp]:
-                    self.bp_occurence[bp].append(bs_id)
+                    self.bp_occurence[bp].add(bs_id)
 
 
     def merge_most_freq_bp(self):
@@ -87,7 +87,7 @@ class BPETrainer:
 
 
     def update_bpe_state(self):
-        affected_bs_id_list = self.bp_occurence[self.max_bp]
+        affected_bs_id_list = list(self.bp_occurence[self.max_bp])
         del self.bp_occurence[self.max_bp]
         del self.bp_freq[self.max_bp]
         # update the byte_seq
@@ -112,7 +112,7 @@ class BPETrainer:
         for bp in all_bps:
             if not self._is_overlapped(bp, self.max_bp):
                 continue
-            old_occurence = self.bp_occurence[bp]
+            old_occurence = list(self.bp_occurence[bp])
             del self.bp_freq[bp]
             del self.bp_occurence[bp]
             ##### Here is the bug:
@@ -136,10 +136,10 @@ class BPETrainer:
     def _add_bp(self, new_bp, bs_id):
         if new_bp not in self.bp_freq.keys():
             self.bp_freq[new_bp] = 0
-            self.bp_occurence[new_bp] = []
+            self.bp_occurence[new_bp] = set()
         self.bp_freq[new_bp] += self.bs_freq[bs_id]
         if bs_id not in self.bp_occurence[new_bp]:
-            self.bp_occurence[new_bp].append(bs_id)
+            self.bp_occurence[new_bp].add(bs_id)
 
 
     def train(self, input_path: str, max_vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
@@ -330,18 +330,21 @@ def save_results(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], cor
             json.dump(vocab0, f, indent=4, ensure_ascii=False)
         with open(f"{corpus_name}_merges.txt", "w") as f:
             for merge in merges:
-                f.write(f'{merge[0]} {merge[1]}\n')
+                item1 = "".join(decoder[t] for t in merge[0])
+                item2 = "".join(decoder[t] for t in merge[1])
+                f.write(f'{item1} {item2}\n')
     except Exception as e:
         print(f'Error when saving results: {e}')
 
 
 if __name__ == "__main__":
-    corpus = "owt_train"
+    corpus = "TinyStoriesV2-GPT4-train"
+    vocab_size=10000
     import time
     begin = time.time()
     # vocab1, merges1 = run(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])
     mid = time.time()
-    vocab2, merges2 = run_fast(input_path=f"data/{corpus}.txt", max_vocab_size=32000, special_tokens=["<|endoftext|>"])
+    vocab2, merges2 = run_fast(input_path=f"data/{corpus}.txt", max_vocab_size=vocab_size, special_tokens=["<|endoftext|>"])
     end = time.time()
     print(f'Naive Run cost {(mid - begin):.3f}')
     print(f'Optimized Run cost {(end - mid):.3f}')
