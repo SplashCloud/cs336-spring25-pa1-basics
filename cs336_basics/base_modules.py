@@ -90,3 +90,32 @@ class SwiGLU(nn.Module):
         apply_W2 = einsum(ele_wise_multiply, self.W2, "... d_ff, d_model d_ff -> ... d_model")
         return apply_W2
 
+
+class RoPE(nn.Module):
+
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device = None):
+        super().__init__()
+        self.theta = theta
+        self.d_k = d_k
+        self.max_seq_len = max_seq_len
+        self.device = device
+        self._register_rotary_matrices() # generate and save the rotary matrices (max_seq_len, d_k, d_k)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        assert x.shape[-1] == self.d_k
+        assert x.shape[-2] == token_positions.shape[-1] and x.shape[-2] <= self.max_seq_len
+        token_positions_indices = nn.functional.one_hot(token_positions.view(-1), num_classes=self.max_seq_len).view(*token_positions.shape, self.max_seq_len)
+        token_positions_indices = token_positions_indices.to(dtype=torch.float32, device=self.device)
+        rotary_matrix = einsum(token_positions_indices, self.rotary_matrices, "... seq_len max_seq_len, max_seq_len d_k1 d_k2 -> ... seq_len d_k1 d_k2")
+        return einsum(rotary_matrix, x, "... seq_len d_k1 d_k2, ... seq_len d_k2 -> ... seq_len d_k1")
+
+    def _register_rotary_matrices(self):
+        rotary_matrices = []
+        for i in range(self.max_seq_len):
+            rotary_matrix_for_i = []
+            for k in range(1, self.d_k//2 + 1):
+                theta = i * self.theta ** (-2*(k-1)/self.d_k)
+                rotary_matrix_for_i.append(torch.Tensor([[math.cos(theta), -math.sin(theta)],
+                                            [math.sin(theta), math.cos(theta)]], device=self.device))
+            rotary_matrices.append(torch.block_diag(*rotary_matrix_for_i))
+        self.register_buffer("rotary_matrices", torch.stack(tensors=rotary_matrices, dim=0))
