@@ -1,13 +1,14 @@
 from torch import nn
 import torch
 import math
-from einops import einsum, reduce
+from einops import einsum, reduce, rearrange
 
 
-def init_linear_weight(weight: torch.Tensor):
-    d_out, d_in = weight.shape
+def init_linear_weight(d_out: int, d_in: int, device = None, dtype = None) -> nn.Parameter:
+    weight = torch.empty((d_out, d_in), device=device, dtype=dtype)
     std = math.sqrt(2 / (d_in + d_out))
-    return nn.init.trunc_normal_(weight, mean=0, std=std, a=-3*std, b=3*std)
+    weight_init = nn.init.trunc_normal_(weight, mean=0, std=std, a=-3*std, b=3*std)
+    return nn.Parameter(data=weight_init, requires_grad=True)
 
 
 class Linear(nn.Module):
@@ -19,9 +20,7 @@ class Linear(nn.Module):
         self.device = device
         self.dtype = dtype
         
-        weight = torch.empty((self.out_features, self.in_features), device=self.device, dtype=self.dtype)
-        std = math.sqrt(2 / (self.in_features + self.out_features))
-        self.W = nn.Parameter(data=nn.init.trunc_normal_(weight, mean=0, std=std, a=-3*std, b=3*std), requires_grad=True)
+        self.W = init_linear_weight(d_out=self.out_features, d_in=self.in_features, device=self.device, dtype=self.dtype)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         assert input.shape[-1] == self.in_features
@@ -74,12 +73,9 @@ class SwiGLU(nn.Module):
         self.device = device
         self.dtype = dtype
 
-        weight1 = torch.empty(size=(self.d_ff, self.d_model), device=self.device, dtype=self.dtype)
-        weight2 = torch.empty(size=(self.d_model, self.d_ff), device=self.device, dtype=self.dtype)
-        weight3 = torch.empty(size=(self.d_ff, self.d_model), device=self.device, dtype=self.dtype)
-        self.W1 = nn.Parameter(data=init_linear_weight(weight1), requires_grad=True)
-        self.W2 = nn.Parameter(data=init_linear_weight(weight2), requires_grad=True)
-        self.W3 = nn.Parameter(data=init_linear_weight(weight3), requires_grad=True)
+        self.W1 = init_linear_weight(d_out=self.d_ff, d_in=self.d_model, device=self.device, dtype=self.dtype)
+        self.W2 = init_linear_weight(d_out=self.d_model, d_in=self.d_ff, device=self.device, dtype=self.dtype)
+        self.W3 = init_linear_weight(d_out=self.d_ff, d_in=self.d_model, device=self.device, dtype=self.dtype)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         assert input.shape[-1] == self.d_model
@@ -119,3 +115,64 @@ class RoPE(nn.Module):
                                             [math.sin(theta), math.cos(theta)]], device=self.device))
             rotary_matrices.append(torch.block_diag(*rotary_matrix_for_i))
         self.register_buffer("rotary_matrices", torch.stack(tensors=rotary_matrices, dim=0))
+
+
+class MultiHeadSelfAttention(nn.Module):
+
+    def __init__(self, d_embedding: int, d_hidden: int,num_heads: int,
+                       theta: float = 0, max_seq_len: int = 0, device = None, dtype = None):
+        super().__init__()
+        self.d_embedding = d_embedding
+        self.d_hidden = d_hidden
+        self.num_heads = num_heads
+        self.d_k = d_hidden // num_heads
+        self.d_v = d_hidden // num_heads
+        self.device = device
+        self.dtype = dtype
+
+        self.WQ = init_linear_weight(d_out=self.num_heads*self.d_k, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
+        self.WK = init_linear_weight(d_out=self.num_heads*self.d_k, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
+        self.WV = init_linear_weight(d_out=self.num_heads*self.d_v, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
+        self.WO = init_linear_weight(d_out=self.d_hidden, d_in=self.num_heads*self.d_v, device=self.device, dtype=self.dtype)
+
+        self.enable_rope = ((theta != 0) and (max_seq_len != 0))
+        if self.enable_rope:
+            self.rope = RoPE(theta=theta, d_k=self.d_k, max_seq_len=max_seq_len, device=self.device)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        assert x.shape[-1] == self.d_embedding # x.shape = (batch_size, ..., seq_len, d_embedding)
+        Q = einsum(x, self.WQ, "... seq_len d_embedding, h_d_k d_embedding -> ... seq_len h_d_k")
+        K = einsum(x, self.WK, "... seq_len d_embedding, h_d_k d_embedding -> ... seq_len h_d_k")
+        V = einsum(x, self.WV, "... seq_len d_embedding, h_d_v d_embedding -> ... seq_len h_d_v")
+        Q = rearrange(Q, "... seq_len (head d_k) -> ... head seq_len d_k", head=self.num_heads, d_k=self.d_k)
+        K = rearrange(K, "... seq_len (head d_k) -> ... head seq_len d_k", head=self.num_heads, d_k=self.d_k)
+        V = rearrange(V, "... seq_len (head d_v) -> ... head seq_len d_v", head=self.num_heads, d_v=self.d_v)
+        if self.enable_rope:
+            assert token_positions is not None
+            Q = self.rope.forward(x=Q, token_positions=token_positions)
+            K = self.rope.forward(x=K, token_positions=token_positions)
+        mask = torch.tril(torch.ones(x.shape[-2], x.shape[-2]))
+        mask = mask.to(dtype=torch.bool)
+        Attn = scaled_dot_product_attention(Q, K, V, mask=mask)
+        Attn = rearrange(Attn, "... head seq_len d_v -> ... seq_len (head d_v)")
+        return einsum(Attn, self.WO, "... seq_len h_d_v, d_hidden h_d_v -> ... seq_len d_hidden")
+
+## Functions
+
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    x_transpose = x.transpose(dim, len(x.shape)-1)
+    x_max = reduce(x, "... dim -> ... 1", "max")
+    x_norm_exp = torch.exp(x_transpose - x_max)
+    x_norm_exp_sum = reduce(x_norm_exp, "... dim -> ... 1", "sum")
+    x_softmax = x_norm_exp / x_norm_exp_sum
+    return x_softmax.transpose(dim, len(x.shape)-1)
+
+def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    QK = einsum(Q, K, "... seq_len_q d_k, ... seq_len_k d_k -> ... seq_len_q seq_len_k")
+    scaled_QK = QK / math.sqrt(Q.shape[-1])
+    if mask is not None:
+        masked_matrix = torch.full(mask.shape, -torch.inf, dtype=Q.dtype)
+        masked_matrix[mask] = 0
+        scaled_QK += masked_matrix
+    softmax_scaled_QK = softmax(scaled_QK, dim=-1)
+    return einsum(softmax_scaled_QK, V, "... seq_len_q seq_len_k, ... seq_len_k d_v -> ... seq_len_q d_v")
