@@ -147,7 +147,7 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     from cs336_basics.base_modules import MultiHeadSelfAttention
-    multihead_self_attention = MultiHeadSelfAttention(d_embedding=d_model, d_hidden=d_model, num_heads=num_heads)
+    multihead_self_attention = MultiHeadSelfAttention(d_embedding=d_model, d_attn=d_model, num_heads=num_heads)
     multihead_self_attention.load_state_dict({
         "WQ": q_proj_weight,
         "WK": k_proj_weight,
@@ -195,7 +195,7 @@ def run_multihead_self_attention_with_rope(
         implementation with the given QKV projection weights and input features.
     """
     from cs336_basics.base_modules import MultiHeadSelfAttention
-    multihead_self_attention = MultiHeadSelfAttention(d_embedding=d_model, d_hidden=d_model, num_heads=num_heads, theta=theta, max_seq_len=max_seq_len)
+    multihead_self_attention = MultiHeadSelfAttention(d_embedding=d_model, d_attn=d_model, num_heads=num_heads, theta=theta, max_seq_len=max_seq_len)
     multihead_self_attention.load_state_dict({
         "WQ": q_proj_weight,
         "WK": k_proj_weight,
@@ -299,7 +299,20 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import TransformerBlock
+    block = TransformerBlock(d_embedding=d_model, d_attn=d_model, num_heads=num_heads, d_ff=d_ff, theta=theta, max_seq_len=max_seq_len)
+    block.load_state_dict({
+        "pre_attention_norm.g": weights["ln1.weight"],
+        "multihead_self_attention.WQ": weights["attn.q_proj.weight"],
+        "multihead_self_attention.WK": weights["attn.k_proj.weight"],
+        "multihead_self_attention.WV": weights["attn.v_proj.weight"],
+        "multihead_self_attention.WO": weights["attn.output_proj.weight"],
+        "pre_ffn_norm.g": weights["ln2.weight"],
+        "position_wise_ffn.W1": weights["ffn.w1.weight"],
+        "position_wise_ffn.W2": weights["ffn.w2.weight"],
+        "position_wise_ffn.W3": weights["ffn.w3.weight"],
+    }, strict=False)
+    return block.forward(in_features)
 
 
 def run_transformer_lm(
@@ -381,7 +394,26 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import Transformer
+    transformer = Transformer(vocab_size=vocab_size, d_embedding=d_model, num_heads=num_heads, d_attn=d_model,
+                              d_ff=d_ff, num_layers=num_layers, context_length=context_length, theta=rope_theta)
+    state_dict = {
+        "embedding.vocab": weights["token_embeddings.weight"],
+        "norm.g": weights["ln_final.weight"],
+        "linear.W": weights["lm_head.weight"]
+    }
+    for i in range(num_layers):
+        state_dict[f"transformer_blocks.{i}.pre_attention_norm.g"] = weights[f"layers.{i}.ln1.weight"]
+        state_dict[f"transformer_blocks.{i}.multihead_self_attention.WQ"] = weights[f"layers.{i}.attn.q_proj.weight"]
+        state_dict[f"transformer_blocks.{i}.multihead_self_attention.WK"] = weights[f"layers.{i}.attn.k_proj.weight"]
+        state_dict[f"transformer_blocks.{i}.multihead_self_attention.WV"] = weights[f"layers.{i}.attn.v_proj.weight"]
+        state_dict[f"transformer_blocks.{i}.multihead_self_attention.WO"] = weights[f"layers.{i}.attn.output_proj.weight"]
+        state_dict[f"transformer_blocks.{i}.pre_ffn_norm.g"] = weights[f"layers.{i}.ln2.weight"]
+        state_dict[f"transformer_blocks.{i}.position_wise_ffn.W1"] = weights[f"layers.{i}.ffn.w1.weight"]
+        state_dict[f"transformer_blocks.{i}.position_wise_ffn.W2"] = weights[f"layers.{i}.ffn.w2.weight"]
+        state_dict[f"transformer_blocks.{i}.position_wise_ffn.W3"] = weights[f"layers.{i}.ffn.w3.weight"]
+    transformer.load_state_dict(state_dict, strict=False)
+    return transformer.forward(in_indices)
 
 
 def run_rmsnorm(

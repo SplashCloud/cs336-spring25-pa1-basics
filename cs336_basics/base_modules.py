@@ -41,6 +41,8 @@ class Embedding(nn.Module):
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         shape = token_ids.shape
+        if not token_ids.is_contiguous():
+            token_ids = token_ids.contiguous()
         token_ids = nn.functional.one_hot(token_ids.view(-1), num_classes=self.num_embeddings).view(*shape, self.num_embeddings)
         token_ids_dtype = token_ids.to(dtype=self.vocab.dtype)
         return einsum(token_ids_dtype, self.vocab, "... seq_len vocab_size, vocab_size d_embedding -> ... seq_len d_embedding")
@@ -100,6 +102,8 @@ class RoPE(nn.Module):
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
         assert x.shape[-1] == self.d_k
         assert x.shape[-2] == token_positions.shape[-1] and x.shape[-2] <= self.max_seq_len
+        if not token_positions.is_contiguous():
+            token_positions = token_positions.contiguous()
         token_positions_indices = nn.functional.one_hot(token_positions.view(-1), num_classes=self.max_seq_len).view(*token_positions.shape, self.max_seq_len)
         token_positions_indices = token_positions_indices.to(dtype=torch.float32, device=self.device)
         rotary_matrix = einsum(token_positions_indices, self.rotary_matrices, "... seq_len max_seq_len, max_seq_len d_k1 d_k2 -> ... seq_len d_k1 d_k2")
@@ -119,21 +123,21 @@ class RoPE(nn.Module):
 
 class MultiHeadSelfAttention(nn.Module):
 
-    def __init__(self, d_embedding: int, d_hidden: int,num_heads: int,
+    def __init__(self, d_embedding: int, d_attn: int,num_heads: int,
                        theta: float = 0, max_seq_len: int = 0, device = None, dtype = None):
         super().__init__()
         self.d_embedding = d_embedding
-        self.d_hidden = d_hidden
+        self.d_attn = d_attn
         self.num_heads = num_heads
-        self.d_k = d_hidden // num_heads
-        self.d_v = d_hidden // num_heads
+        self.d_k = d_attn // num_heads
+        self.d_v = d_attn // num_heads
         self.device = device
         self.dtype = dtype
 
         self.WQ = init_linear_weight(d_out=self.num_heads*self.d_k, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
         self.WK = init_linear_weight(d_out=self.num_heads*self.d_k, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
         self.WV = init_linear_weight(d_out=self.num_heads*self.d_v, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
-        self.WO = init_linear_weight(d_out=self.d_hidden, d_in=self.num_heads*self.d_v, device=self.device, dtype=self.dtype)
+        self.WO = init_linear_weight(d_out=self.d_attn, d_in=self.num_heads*self.d_v, device=self.device, dtype=self.dtype)
 
         self.enable_rope = ((theta != 0) and (max_seq_len != 0))
         if self.enable_rope:
@@ -155,7 +159,7 @@ class MultiHeadSelfAttention(nn.Module):
         mask = mask.to(dtype=torch.bool)
         Attn = scaled_dot_product_attention(Q, K, V, mask=mask)
         Attn = rearrange(Attn, "... head seq_len d_v -> ... seq_len (head d_v)")
-        return einsum(Attn, self.WO, "... seq_len h_d_v, d_hidden h_d_v -> ... seq_len d_hidden")
+        return einsum(Attn, self.WO, "... seq_len h_d_v, d_attn h_d_v -> ... seq_len d_attn")
 
 ## Functions
 
