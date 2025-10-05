@@ -66,3 +66,16 @@
     - embedding: 1.30%, attention(single layer): 3.56%, ffn(single layer): 0.50%, final linear: 1.30%
 - GPT-2 large(36-layers, 1280-d_model, 20-heads)
     - embedding: 0.87%, attention(single layer): 2.40%, ffn(single layer): 0.33%, final linear: 0.87%
+
+
+## Training
+
+### Learning rate
+
+run step for 100 iterations
+- lr=1: loss decrease from 26.27 to 12.51
+- lr=1e1: loss decrease from 26.27 to 0.01
+- lr=1e2: loss decrease from 26.27 to 0(at iter#67)
+    - gradient vanishing
+- lr=1e3: loss decrease from 26.27 to inf(keep increasing, reach inf at iter#25)
+    - gradient explosion
