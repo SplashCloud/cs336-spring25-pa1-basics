@@ -15,11 +15,10 @@ def cross_entropy(logit: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     logit_exp_sum_log = torch.log(logit_exp_sum)
     all_cross_entropy = logit_exp_sum_log - logit_norm # (..., vocab_size)
     # use target to indexing
-    target_one_hot = nn.functional.one_hot(target.view(-1), num_classes=vocab_size).view(*target.shape, vocab_size).to(dtype=torch.float32)
-    target_ce = einsum(all_cross_entropy, target_one_hot, "... vocab_size, ... vocab_size -> ... vocab_size")
-    target_ce = reduce(target_ce, "... vocab_size -> ... 1", "sum")
-    return reduce(target_ce, "... 1 -> 1", "mean")
-
+    assert target.dtype == torch.int64 or target.dtype == torch.long
+    slice_indices = tuple(torch.arange(d) for d in all_cross_entropy.shape[:-1])
+    slice_indices += (target,)
+    return all_cross_entropy[slice_indices].mean() # need first k-1 dimensions to be [0,...d-1]
 
 def calculate_perplexity(loss: torch.Tensor) -> torch.Tensor:
     ''' loss[..., i] is the loss of token `i` in the sequence: loss(x_i | x_{1...i-1}) '''

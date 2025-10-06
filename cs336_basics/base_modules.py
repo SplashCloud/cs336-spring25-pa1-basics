@@ -40,13 +40,8 @@ class Embedding(nn.Module):
         self.vocab = nn.Parameter(data=nn.init.trunc_normal_(weight, mean=0, std=1, a=-3, b=3), requires_grad=True)
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
-        shape = token_ids.shape
-        if not token_ids.is_contiguous():
-            token_ids = token_ids.contiguous()
-        token_ids = nn.functional.one_hot(token_ids.view(-1), num_classes=self.num_embeddings).view(*shape, self.num_embeddings)
-        token_ids_dtype = token_ids.to(dtype=self.vocab.dtype)
-        return einsum(token_ids_dtype, self.vocab, "... seq_len vocab_size, vocab_size d_embedding -> ... seq_len d_embedding")
-
+        assert token_ids.dtype == torch.int64 or token_ids.dtype == torch.long
+        return self.vocab[token_ids]
 
 class RMSNorm(nn.Module):
 
@@ -102,11 +97,8 @@ class RoPE(nn.Module):
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
         assert x.shape[-1] == self.d_k
         assert x.shape[-2] == token_positions.shape[-1] and x.shape[-2] <= self.max_seq_len
-        if not token_positions.is_contiguous():
-            token_positions = token_positions.contiguous()
-        token_positions_indices = nn.functional.one_hot(token_positions.view(-1), num_classes=self.max_seq_len).view(*token_positions.shape, self.max_seq_len)
-        token_positions_indices = token_positions_indices.to(dtype=torch.float32, device=self.device)
-        rotary_matrix = einsum(token_positions_indices, self.rotary_matrices, "... seq_len max_seq_len, max_seq_len d_k1 d_k2 -> ... seq_len d_k1 d_k2")
+        assert token_positions.dtype == torch.int64 or token_positions.dtype == torch.long
+        rotary_matrix = self.rotary_matrices[token_positions] # (..., seq_len, d_k1, d_k2)
         return einsum(rotary_matrix, x, "... seq_len d_k1 d_k2, ... seq_len d_k2 -> ... seq_len d_k1")
 
     def _register_rotary_matrices(self):
