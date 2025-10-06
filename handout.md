@@ -12,35 +12,40 @@
 - Input: (batch_size, seq_len), and each token is a token_id
 - Embedding Layer
     - A parameter matrix: shape=(vocab_size, d_model), and mapping the token_id to embedding
-    - convert every token_id to a one-hot vector, so input shape=(batch_size, seq_len, vocab_size)
     - return (batch_size, seq_len, d_model)
-    - computation: 2 * vocab_size * batch_size * seq_len * d_model
+    - computation: batch_size * seq_len * d_model
 - Multi-Layer Transformer Block
     - Pre-Norm Causal-Masking Multi-head Self-Attention
         - RMSNorm
             - weight: (d_model,)
             - element-wise multiple
+            - computation: 7 * batch_size * seq_len * d_model
         - Causal-Masking Multi-head Self-Attention
             - WQ/WK/WV: (num_heads\*d_k, d_model), WO: (d_model, num_heads\*d_v)
             - get Q/K/V: (batch_size, seq_len, d_model) => (batch_size, num_heads, seq_len, d_k/d_v)
                 - computation: 3 * (2 * d_model * batch_size * seq_len * d_model)
             - ROPE(Q/K): (batch_size, num_heads, seq_len, d_k)
-                - computation: 2 * (2 * seq_len * batch_size * num_heads * seq_len * d_k * d_k + 2 * d_k * batch_size * num_heads * seq_len * d_k)
+                - indexing + MM
+                - computation: 2 * (batch_size * num_heads * seq_len * d_k * d_k + 2 * d_k * batch_size * num_heads * seq_len * d_k)
+            - QK: (batch_size, num_heads, seq_len, d_k) * (batch_size, num_heads, seq_len, d_k) => (batch_size, num_heads, seq_len, seq_len)
+                - computation: 2 * d_k * (batch_size * num_heads * seq_len * seq_len)
+            - scaled & mask & softmax:
+                - computation: 7 * (batch_size * num_heads * seq_len * seq_len)
             - (QK)*V: (batch_size, num_heads, seq_len, seq_len) => (batch_size, num_heads, seq_len, d_v)
-                - computation: 2 * d_k * batch_size * num_heads * seq_len * seq_len + 2 * seq_len * batch_size * num_heads * seq_len * d_v
+                - computation: 2 * seq_len * batch_size * num_heads * seq_len * d_v
             - WO*(): (batch_size, seq_len, d_model)
                 - computation: 2 * d_model * batch_size * seq_len * d_model
             - return (batch_size, seq_len, d_model)
         - Residual-Add
+            - computation: batch_size * seq_len * d_model
     - Pre-Norm Position-wise Feed-Forward Network
-        - RMSNorm
-        - SWiGLU
+        - RMSNorm: same
         - SwiGLU: SwiGLU(x, W1, W2, W3) = W2(SiLU(W1x) · (W3x)) = W2 *(((W1x)(sigmoid(W1x))) · (W3x))
             - W1/W3: (d_ff, d_model) W2: (d_model, d_ff)
             - W1x, W3x: (batch_size, seq_len, d_ff)
                 - computation: 2 * (2 * d_model * batch_size * seq_len * d_ff)
             - SiLU(W1x)·(W3x): (batch_size, seq_len, d_ff)
-                - computation: 2 * batch_size * seq_len * d_ff
+                - computation: 6 * batch_size * seq_len * d_ff
             - W2*(): (batch_size, seq_len, d_model)
                 - computation: 2 * d_ff * batch_size * seq_len * d_model
             - return (batch_size, seq_len, d_model)
@@ -51,6 +56,7 @@
     - (vocab_size, d_model)
     - computation: 2 * d_model * batch_size * seq_len * vocab_size
 - softmax (convert to a distribution)
+    - computation: 5 * batch_size * seq_len * vocab_size
 
 
 ### Computation and Memory Analysis
