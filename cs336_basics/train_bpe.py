@@ -4,13 +4,10 @@ import os
 from typing import BinaryIO
 import json
 from tqdm import tqdm
-import logging
+from cs336_basics.logger import LoggerManager
 
-logger = logging.getLogger(name='train_bpe')
-logger.setLevel(level=logging.DEBUG)
-file_handler = logging.FileHandler(filename="bpe.log", mode='w')
-file_handler.setLevel(level=logging.DEBUG)
-logger.addHandler(file_handler)
+
+logger = LoggerManager("TrainBPELogger", log_to_file=True, log_file_path="logs/bpe.log")
 
 OPTIMIZATION = True
 
@@ -338,8 +335,8 @@ def save_results(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], cor
 
 
 if __name__ == "__main__":
-    corpus = "TinyStoriesV2-GPT4-train"
-    vocab_size=10000
+    corpus = "owt_train"
+    vocab_size=32000
     import time
     begin = time.time()
     # vocab1, merges1 = run(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])

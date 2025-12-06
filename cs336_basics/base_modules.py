@@ -51,7 +51,6 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.g = nn.Parameter(data=torch.ones(self.d_model), requires_grad=True)
 
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         assert x.shape[-1] == self.d_model
         origin_type = x.dtype
@@ -95,10 +94,13 @@ class RoPE(nn.Module):
         self._register_rotary_matrices() # generate and save the rotary matrices (max_seq_len, d_k, d_k)
 
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        # x.shape = (batch_size, n_heads, seq_len, d_k)
+        # token_positions = (batch_size, seq_len)
         assert x.shape[-1] == self.d_k
         assert x.shape[-2] == token_positions.shape[-1] and x.shape[-2] <= self.max_seq_len
         assert token_positions.dtype == torch.int64 or token_positions.dtype == torch.long
         rotary_matrix = self.rotary_matrices[token_positions] # (..., seq_len, d_k1, d_k2)
+        rotary_matrix = rotary_matrix.unsqueeze(1) # add one dimension
         return einsum(rotary_matrix, x, "... seq_len d_k1 d_k2, ... seq_len d_k2 -> ... seq_len d_k1")
 
     def _register_rotary_matrices(self):

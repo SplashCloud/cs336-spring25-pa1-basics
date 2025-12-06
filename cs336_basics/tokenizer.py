@@ -1,17 +1,11 @@
-from heapq import merge
 import os
-import logging
 import regex as re
 import json
 from typing import Iterable
-import tiktoken
+from cs336_basics.logger import LoggerManager
 
 
-logger = logging.getLogger(name='tokenizer')
-logger.setLevel(level=logging.DEBUG)
-file_handler = logging.FileHandler(filename="tokenizer.log", mode='w')
-file_handler.setLevel(level=logging.DEBUG)
-logger.addHandler(file_handler)
+logger = LoggerManager("TokenizerLogger")
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -54,7 +48,7 @@ class BPETokenizer:
         with open(merges_file, encoding="utf-8") as f:
             merges_pair = [tuple(line.rstrip().split(" ")) for line in f.readlines()]
             merges = [
-                tuple(
+                (
                     bytes([gpt2_decoder[token] for token in merge_item1]),
                     bytes([gpt2_decoder[token] for token in merge_item2])
                 ) 
@@ -82,7 +76,7 @@ class BPETokenizer:
             f.seek(os.SEEK_END)
             file_size = f.tell()
             chunk_size = max(chunk_size, file_size//100)
-            logger.info(f"Read {chunk_size} bytes per time")
+            logger.info(f"Read {chunk_size} bytes per time from {filename}")
             offset = 0
             while True:
                 f.seek(offset)
