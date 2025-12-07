@@ -4,6 +4,9 @@ from torch import argmax
 from tqdm import tqdm
 import numpy as np
 import os
+import time
+from dotenv import load_dotenv
+from concurrent.futures import ProcessPoolExecutor
 
 from cs336_basics.logger import LoggerManager
 from cs336_basics.transformer import Transformer
@@ -12,6 +15,10 @@ from cs336_basics.tokenizer import BPETokenizer
 from cs336_basics.train_modules import cross_entropy, data_loading
 from cs336_basics.base_modules import softmax
 
+
+load_dotenv()
+dir = os.getenv('DATA_DIR')
+
 '''
 1. model
 2. optimizer
@@ -19,6 +26,22 @@ from cs336_basics.base_modules import softmax
 4. vocabulary from tokenizer
 5. dataloader
 '''
+
+# Global function for multiprocessing (must be at module level)
+def _encode_chunk_worker(args):
+    """Worker function for multiprocessing encoding"""
+    lines_chunk, tokenizer_config = args
+    # Create tokenizer in each worker process
+    tokenizer = BPETokenizer.from_file(
+        vocab_file=tokenizer_config["vocab_file"],
+        merges_file=tokenizer_config["merge_file"],
+        special_tokens=tokenizer_config["special_tokens"]
+    )
+    result = []
+    for line in lines_chunk:
+        encoded = tokenizer.encode(line)
+        result.extend(encoded)
+    return result
 
 class Training:
 
@@ -83,10 +106,42 @@ class Training:
         if os.path.exists(npy_file):
             encoded_input = np.load(npy_file)
         else:
+            s = time.time()
+            # Read all lines first (this is fast)
+            self.logger.info("Reading file lines...")
             with open(dataloader_config["input_file"], "r") as f:
-                for id in tqdm(self.tokenizer.encode_iterable(f)):
-                    encoded_input.append(id)
+                lines = f.readlines()
+            
+            # Use multi-processing to encode (bypasses GIL for CPU-intensive tasks)
+            max_available_processes = os.cpu_count() or 1  # Get available CPU cores
+            num_processes = min(max_available_processes, len(lines) // 1000 + 1)  # Adjust based on data size
+            chunk_size = max(1, len(lines) // num_processes)
+            
+            self.logger.info(f"Encoding with {num_processes} processes, chunk size: {chunk_size} lines")
+            
+            # Split lines into chunks
+            line_chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
+            
+            # Prepare arguments for worker function (tokenizer config + line chunks)
+            tokenizer_config = self.config["tokenizer_config"]
+            worker_args = [(chunk, tokenizer_config) for chunk in line_chunks]
+            
+            # Process chunks in parallel using multiprocessing (maintain order)
+            with ProcessPoolExecutor(max_workers=num_processes) as executor:
+                # Use map to maintain order
+                chunk_results = list(tqdm(
+                    executor.map(_encode_chunk_worker, worker_args),
+                    total=len(worker_args),
+                    desc="Encoding chunks"
+                ))
+                
+                # Flatten results
+                for chunk_result in chunk_results:
+                    encoded_input.extend(chunk_result)
+            
             np.save(npy_file, np.array(encoded_input))
+            e = time.time()
+            self.logger.info(f'encode the input file cost {e - s} seconds')
         self.logger.info(f"dataset has {len(encoded_input)} tokens")
         def loading():
             return data_loading(
@@ -105,10 +160,10 @@ class Training:
             for i in range(epochs):
                 for j in tqdm(range(iterations)):
                     input, target = self.dataloader()
-                    output = self.model.forward(torch.Tensor(input).to(dtype=torch.int64))
+                    output = self.model.forward(input)
                     loss = cross_entropy(
                         output.view(-1, output.size(-1)),
-                        torch.Tensor(target).to(dtype=torch.int64).view(-1)
+                        target.view(-1)
                     )
                     self.logger.log_loss(i, j, loss.item())
                     self.opti.zero_grad()
@@ -133,7 +188,7 @@ class Training:
 
 
 if __name__ == "__main__":
-    device = torch.device("cpu")
+    device = torch.device("cuda:0")
     dtype = torch.float32
     model_config = {
         "name": "transformer",
@@ -157,14 +212,14 @@ if __name__ == "__main__":
         "eps": 1e-6
     }
     tokenizer_config = {
-        "vocab_file": "/home/splashcloud/workspace/cs336/assignment1-basics/data/vocab/TinyStoriesV2-GPT4-train_vocab.json",
-        "merge_file": "/home/splashcloud/workspace/cs336/assignment1-basics/data/vocab/TinyStoriesV2-GPT4-train_merges.txt",
+        "vocab_file": f"{dir}/data/vocab/TinyStoriesV2-GPT4-train_vocab.json",
+        "merge_file": f"{dir}/data/vocab/TinyStoriesV2-GPT4-train_merges.txt",
         "special_tokens": ["<|endoftext|>"]
     }
     dataloader_config = {
         "batch_size": 32,
         "context_length": 256,
-        "input_file": "/home/splashcloud/workspace/cs336/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt",
+        "input_file": f"{dir}/data/TinyStoriesV2-GPT4-train.txt",
         "device": device
     }
     config = {

@@ -335,14 +335,14 @@ def save_results(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], cor
 
 
 if __name__ == "__main__":
-    corpus = "owt_train"
-    vocab_size=32000
+    corpus = "TinyStoriesV2-GPT4-train"
+    vocab_size=10000
     import time
     begin = time.time()
     # vocab1, merges1 = run(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])
-    mid = time.time()
+    # mid = time.time()
     vocab2, merges2 = run_fast(input_path=f"data/{corpus}.txt", max_vocab_size=vocab_size, special_tokens=["<|endoftext|>"])
     end = time.time()
-    print(f'Naive Run cost {(mid - begin):.3f}')
-    print(f'Optimized Run cost {(end - mid):.3f}')
+    # print(f'Naive Run cost {(mid - begin):.3f}')
+    print(f'Optimized Run cost {(end - begin):.3f}')
     save_results(vocab2, merges2, corpus_name=corpus)

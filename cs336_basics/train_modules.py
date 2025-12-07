@@ -20,7 +20,7 @@ def cross_entropy(logit: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     all_cross_entropy = logit_exp_sum_log - logit_norm # (..., vocab_size)
     # use target to indexing
     assert target.dtype == torch.int64 or target.dtype == torch.long
-    slice_indices = tuple(torch.arange(d) for d in all_cross_entropy.shape[:-1])
+    slice_indices = tuple(torch.arange(d, dtype=target.dtype, device=target.device) for d in all_cross_entropy.shape[:-1])
     slice_indices += (target,)
     return all_cross_entropy[slice_indices].mean() # need first k-1 dimensions to be [0,...d-1]
 
@@ -58,8 +58,8 @@ def data_loading(x: npt.NDArray, batch_size: int, context_length: int, device: s
     first_ele_range = list(range(first_ele_min_index, first_ele_max_index+1))
     import random
     selected_ele = random.sample(first_ele_range, batch_size)
-    s = torch.stack(list(torch.Tensor(x[i:i+context_length]) for i in selected_ele), dim=0).to(device=device)
-    t = torch.stack(list(torch.Tensor(x[i+1:i+1+context_length]) for i in selected_ele), dim=0).to(device=device)
+    s = torch.stack(list(torch.Tensor(x[i:i+context_length]) for i in selected_ele), dim=0).to(dtype=torch.int64, device=device)
+    t = torch.stack(list(torch.Tensor(x[i+1:i+1+context_length]) for i in selected_ele), dim=0).to(dtype=torch.int64, device=device)
     return s, t
 
 def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, iteration: int, out: str | os.PathLike | BinaryIO | IO[bytes]):

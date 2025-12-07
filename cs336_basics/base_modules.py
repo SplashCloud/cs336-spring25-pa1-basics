@@ -49,7 +49,7 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.d_model = d_model
         self.eps = eps
-        self.g = nn.Parameter(data=torch.ones(self.d_model), requires_grad=True)
+        self.g = nn.Parameter(data=torch.ones(self.d_model, dtype=dtype, device=device), requires_grad=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         assert x.shape[-1] == self.d_model
@@ -109,10 +109,10 @@ class RoPE(nn.Module):
             rotary_matrix_for_i = []
             for k in range(1, self.d_k//2 + 1):
                 theta = i * self.theta ** (-2*(k-1)/self.d_k)
-                rotary_matrix_for_i.append(torch.Tensor([[math.cos(theta), -math.sin(theta)],
+                rotary_matrix_for_i.append(torch.tensor([[math.cos(theta), -math.sin(theta)],
                                             [math.sin(theta), math.cos(theta)]], device=self.device))
             rotary_matrices.append(torch.block_diag(*rotary_matrix_for_i))
-        self.register_buffer("rotary_matrices", torch.stack(tensors=rotary_matrices, dim=0))
+        self.register_buffer("rotary_matrices", torch.stack(tensors=rotary_matrices, dim=0).to(device=self.device))
 
 
 class MultiHeadSelfAttention(nn.Module):
@@ -149,7 +149,7 @@ class MultiHeadSelfAttention(nn.Module):
             assert token_positions is not None
             Q = self.rope.forward(x=Q, token_positions=token_positions)
             K = self.rope.forward(x=K, token_positions=token_positions)
-        mask = torch.tril(torch.ones(x.shape[-2], x.shape[-2]))
+        mask = torch.tril(torch.ones(x.shape[-2], x.shape[-2], device=x.device))
         mask = mask.to(dtype=torch.bool)
         Attn = scaled_dot_product_attention(Q, K, V, mask=mask)
         Attn = rearrange(Attn, "... head seq_len d_v -> ... seq_len (head d_v)")
@@ -169,7 +169,7 @@ def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tens
     QK = einsum(Q, K, "... seq_len_q d_k, ... seq_len_k d_k -> ... seq_len_q seq_len_k")
     scaled_QK = QK / math.sqrt(Q.shape[-1])
     if mask is not None:
-        masked_matrix = torch.full(mask.shape, -torch.inf, dtype=Q.dtype)
+        masked_matrix = torch.full(mask.shape, -torch.inf, dtype=Q.dtype, device=Q.device)
         masked_matrix[mask] = 0
         scaled_QK += masked_matrix
     softmax_scaled_QK = softmax(scaled_QK, dim=-1)

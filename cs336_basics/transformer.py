@@ -25,7 +25,7 @@ class TransformerBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         '''x.shape = (... seq_len d_embedding)'''
         hidden1 = self.pre_attention_norm.forward(x)
-        token_positions = torch.arange(x.shape[-2])
+        token_positions = torch.arange(x.shape[-2], device=x.device)
         token_positions = repeat(token_positions, "seq_len -> batch_size seq_len", batch_size=math.prod(x.shape[:-2]))
         token_positions = token_positions.reshape(x.shape[:-1])
         hidden1 = self.multihead_self_attention.forward(hidden1, token_positions=token_positions)
