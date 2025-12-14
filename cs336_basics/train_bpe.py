@@ -4,7 +4,10 @@ import os
 from typing import BinaryIO
 import json
 from tqdm import tqdm
+from pathlib import Path
+from cs336_basics.config import DATA_DIR
 from cs336_basics.logger import LoggerManager
+from cs336_basics.timer import Timer
 
 
 logger = LoggerManager("TrainBPELogger", log_to_file=True, log_file_path="logs/bpe.log")
@@ -322,10 +325,12 @@ def save_results(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], cor
     for id, token in vocab.items():
         s = "".join([decoder[t] for t in token])
         vocab0[s] = id
+    vocab_dir = Path(f'{DATA_DIR}/vocab')
+    vocab_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with open(f"{corpus_name}_vocab.json", 'w') as f:
+        with open(f"{vocab_dir}/{corpus_name}_vocab.json", 'w') as f:
             json.dump(vocab0, f, indent=4, ensure_ascii=False)
-        with open(f"{corpus_name}_merges.txt", "w") as f:
+        with open(f"{vocab_dir}/{corpus_name}_merges.txt", "w") as f:
             for merge in merges:
                 item1 = "".join(decoder[t] for t in merge[0])
                 item2 = "".join(decoder[t] for t in merge[1])
@@ -335,14 +340,13 @@ def save_results(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], cor
 
 
 if __name__ == "__main__":
-    corpus = "TinyStoriesV2-GPT4-train"
-    vocab_size=10000
-    import time
-    begin = time.time()
-    # vocab1, merges1 = run(input_path=corpus, max_vocab_size=1000, special_tokens=["<|endoftext|>"])
-    # mid = time.time()
-    vocab2, merges2 = run_fast(input_path=f"data/{corpus}.txt", max_vocab_size=vocab_size, special_tokens=["<|endoftext|>"])
-    end = time.time()
-    # print(f'Naive Run cost {(mid - begin):.3f}')
-    print(f'Optimized Run cost {(end - begin):.3f}')
-    save_results(vocab2, merges2, corpus_name=corpus)
+    import sys
+    if len(sys.argv) < 3:
+        print(f'{sys.argv[0]} [corpus] [vocab_size]')
+        exit(-1)
+    corpus = sys.argv[1]
+    vocab_size = int(sys.argv[2])
+    with Timer() as t:
+        vocab, merges = run_fast(input_path=f"{DATA_DIR}/{corpus}.txt", max_vocab_size=vocab_size, special_tokens=["<|endoftext|>"])
+    print(f'cost {t.elapsed:.3f} seconds')
+    save_results(vocab, merges, corpus)

@@ -1,5 +1,6 @@
 import torch
 import numpy.typing as npt
+import numpy as np
 from torch import nn, optim
 from einops import reduce, einsum, repeat
 from typing import Iterable, BinaryIO, IO
@@ -7,22 +8,24 @@ import math
 import os
 
 def cross_entropy(logit: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    vocab_size = logit.shape[-1]
-    # minus max value to keep value stability
-    logit_max = reduce(logit, "... vocab_size -> ... 1", "max")
-    logit_max = repeat(logit_max, "... 1 -> ... vocab_size", vocab_size=vocab_size)
-    logit_norm = logit - logit_max
-    # calculate the cross entropy for all positions
-    logit_exp = torch.exp(logit_norm)
-    logit_exp_sum = reduce(logit_exp, "... vocab_size -> ... 1", "sum")
-    logit_exp_sum = repeat(logit_exp_sum, "... 1 -> ... vocab_size", vocab_size=vocab_size)
-    logit_exp_sum_log = torch.log(logit_exp_sum)
-    all_cross_entropy = logit_exp_sum_log - logit_norm # (..., vocab_size)
-    # use target to indexing
-    assert target.dtype == torch.int64 or target.dtype == torch.long
-    slice_indices = tuple(torch.arange(d, dtype=target.dtype, device=target.device) for d in all_cross_entropy.shape[:-1])
-    slice_indices += (target,)
-    return all_cross_entropy[slice_indices].mean() # need first k-1 dimensions to be [0,...d-1]
+    # Optimized version: use PyTorch native operations and gather instead of creating large index tensors
+    # This avoids creating many torch.arange tensors during backward pass
+
+    # Subtract max for numerical stability (using PyTorch native operations instead of einops)
+    logit_max = logit.max(dim=-1, keepdim=True)[0]  # (..., 1)
+    logit_norm = logit - logit_max  # (..., vocab_size)
+    
+    # Compute log-sum-exp: log(sum(exp(logit_norm)))
+    log_sum_exp = torch.log(torch.exp(logit_norm).sum(dim=-1, keepdim=True))  # (..., 1)
+    
+    # Get logits for target positions only using gather (more efficient than creating index tuples)
+    # logit has shape (..., vocab_size), target has shape (...)
+    target_logits = logit_norm.gather(dim=-1, index=target.unsqueeze(-1)).squeeze(-1)  # (...)
+    
+    # Cross-entropy = log-sum-exp - target_logit
+    loss = log_sum_exp.squeeze(-1) - target_logits  # (...)
+    
+    return loss.mean()
 
 def calculate_perplexity(loss: torch.Tensor) -> torch.Tensor:
     ''' loss[..., i] is the loss of token `i` in the sequence: loss(x_i | x_{1...i-1}) '''
@@ -53,13 +56,14 @@ def gradient_clipping(params: Iterable[nn.Parameter], max_norm: float, eps: floa
 
 def data_loading(x: npt.NDArray, batch_size: int, context_length: int, device: str) -> tuple[torch.Tensor, torch.Tensor]:
     l = len(x)
-    first_ele_min_index = 0
-    first_ele_max_index = l - context_length - 1
-    first_ele_range = list(range(first_ele_min_index, first_ele_max_index+1))
-    import random
-    selected_ele = random.sample(first_ele_range, batch_size)
-    s = torch.stack(list(torch.Tensor(x[i:i+context_length]) for i in selected_ele), dim=0).to(dtype=torch.int64, device=device)
-    t = torch.stack(list(torch.Tensor(x[i+1:i+1+context_length]) for i in selected_ele), dim=0).to(dtype=torch.int64, device=device)
+    max_start_idx = l - context_length - 1
+    # Generate random indices directly without creating a huge list
+    selected_ele = np.random.randint(0, max_start_idx + 1, size=batch_size)
+    # Use advanced indexing to get all slices at once, then convert to tensor
+    # This avoids creating many intermediate tensors and reduces CPU-GPU transfers
+    indices = np.arange(context_length)[None, :] + selected_ele[:, None]  # (batch_size, context_length)
+    s = torch.from_numpy(x[indices]).to(dtype=torch.int64, device=device)
+    t = torch.from_numpy(x[indices + 1]).to(dtype=torch.int64, device=device)
     return s, t
 
 def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, iteration: int, out: str | os.PathLike | BinaryIO | IO[bytes]):
@@ -72,8 +76,9 @@ def save_checkpoint(model: nn.Module, optimizer: optim.Optimizer, iteration: int
     }
     torch.save(states, out)
 
-def load_checkpoint(src: str | os.PathLike | BinaryIO | IO[bytes], model: nn.Module, optimizer: optim.Optimizer) -> int:
+def load_checkpoint(src: str | os.PathLike | BinaryIO | IO[bytes], model: nn.Module, optimizer: optim.Optimizer = None) -> int:
     states = torch.load(src)
     model.load_state_dict(states["model_state"])
-    optimizer.load_state_dict(states["opti_state"])
+    if optimizer != None:
+        optimizer.load_state_dict(states["opti_state"])
     return states["iteration"]

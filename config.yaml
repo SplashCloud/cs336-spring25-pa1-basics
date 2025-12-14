@@ -1,0 +1,48 @@
+# Training Configuration File
+
+# Device configuration
+device: "cuda:0"  # Use "cpu" or "cuda:0", "cuda:1", etc.
+dtype: "float32"  # Use "float32" or "float16", "bfloat16"
+
+# Training parameters
+epochs: 1
+iterations: 10000
+
+# Model configuration
+model_config:
+  name: "transformer"
+  vocab_size: 10000
+  d_embedding: 512
+  num_heads: 16
+  d_model: 512
+  d_ff: 1344
+  num_layers: 4
+  context_length: 256
+  theta: 10000
+
+# Optimizer configuration
+optimizer_config:
+  name: "adamw"
+  min_lr: 3.0e-5
+  enable_lr_schedule: true
+  max_lr: 3.0e-4
+  warmup_t: 500  # int(iterations * 0.05) = 500
+  cosine_annealing_t: 10000  # iterations
+  weight_decay: 0.01
+  beta1: 0.99
+  beta2: 0.99
+  eps: 1.0e-6
+
+# Tokenizer configuration
+tokenizer_config:
+  vocab_file: "${DATA_DIR}/vocab/TinyStoriesV2-GPT4-train_vocab.json"
+  merge_file: "${DATA_DIR}/vocab/TinyStoriesV2-GPT4-train_merges.txt"
+  special_tokens:
+    - "<|endoftext|>"
+
+# DataLoader configuration
+dataloader_config:
+  batch_size: 32
+  context_length: 256
+  input_file: "${DATA_DIR}/TinyStoriesV2-GPT4-train.txt"
+

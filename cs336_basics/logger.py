@@ -85,7 +85,7 @@ class LoggerManager:
                 log_file_path = Path(log_file_path)
             
             # Open log file in append mode
-            self.log_file = open(log_file_path, 'w', encoding='utf-8')
+            self.log_file = open(log_file_path, 'a', encoding='utf-8')
     
     def _get_caller_info(self) -> tuple[str, int, str]:
         """Get information about the caller (file, line, function)."""

@@ -3,6 +3,11 @@ from torch import optim, nn
 import torch
 import math
 
+from cs336_basics.logger import LoggerManager
+from cs336_basics.train_modules import learning_rate_schedule
+from cs336_basics.config import TRAINING_LOG_FILE
+
+logger = LoggerManager("OptimizerLogger", log_to_file=True, log_file_path=TRAINING_LOG_FILE)
 
 class SGD(optim.Optimizer):
 
@@ -31,7 +36,8 @@ class SGD(optim.Optimizer):
 
 class AdamW(optim.Optimizer):
 
-    def __init__(self, params, lr: float, weight_decay: float, betas: tuple[float, float], eps: float):
+    def __init__(self, params, lr: float, weight_decay: float, betas: tuple[float, float], eps: float, 
+                        enable_lr_schedule: bool = False, max_lr: float = None, warmup_t: int = None, cosine_annealing_t: int = None):
         defaults = {
             "lr": lr,
             "weight_decay": weight_decay,
@@ -39,10 +45,17 @@ class AdamW(optim.Optimizer):
             "beta2": betas[1],
             "eps": eps
         }
+        if enable_lr_schedule:
+            defaults["max_lr"] = max_lr
+            defaults["warmup_t"] = warmup_t
+            defaults["cosine_annealing_t"] = cosine_annealing_t
+        self.enable_lr_schedule = enable_lr_schedule
+        logger.info(f'enable_lr_schedule = {self.enable_lr_schedule} in AdamW...')
         super().__init__(params, defaults)
 
     def step(self, closure: Optional[Callable] = None):
         loss = None if closure is None else closure()
+        logging = False
         for group in self.param_groups:
             lr = group["lr"]
             beta1 = group["beta1"]
@@ -59,6 +72,12 @@ class AdamW(optim.Optimizer):
                 v = state.get("v", 0)
                 t = state.get("t", 1)
 
+                if self.enable_lr_schedule:
+                    lr = learning_rate_schedule(t, group["max_lr"], lr, group["warmup_t"], group["cosine_annealing_t"])
+                if not logging:
+                    logger.info(f"learning rate = {lr} at iteration#{t}...")
+                    logging = True
+
                 grad = p.grad.data
                 m = beta1 * m + (1 - beta1) * grad
                 v = beta2 * v + (1 - beta2) * torch.pow(grad, 2)
@@ -71,15 +90,3 @@ class AdamW(optim.Optimizer):
                 state["t"] = t + 1
 
         return loss
-
-
-if __name__ == "__main__":
-    torch.manual_seed(0)
-    weight = nn.Parameter(5 * torch.randn(10, 10))
-    opt = SGD([weight], lr=1) # change lr from 1 to 1e3
-    for t in range(100):
-        opt.zero_grad()
-        loss = (weight**2).mean()
-        print(f'iter#{t}: loss={loss.cpu().item()}')
-        loss.backward()
-        opt.step()
