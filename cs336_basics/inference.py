@@ -35,7 +35,7 @@ class Inference:
             device=self.device,
             dtype=self.dtype
         )
-        load_checkpoint(src="model.pt", model=self.model)
+        load_checkpoint(src="output/model.pt", model=self.model)
 
     def _setup_tokenizer(self):
         assert "tokenizer_config" in self.config.keys()

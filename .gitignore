@@ -166,3 +166,4 @@ data/
 .vscode/
 *.out
 output/
+logs/

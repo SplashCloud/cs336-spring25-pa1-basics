@@ -196,7 +196,9 @@ class Training:
                     # Flatten results
                     for chunk_result in chunk_results:
                         encoded_input.extend(chunk_result)
-                
+                    
+                    encoded_input = np.array(encoded_input) # error: only integer scalar arrays can be converted to a scalar index
+
                 np.save(npy_file, np.array(encoded_input))
             self.logger.info(f'encode the input file cost {t.elapsed:.3f} seconds')
         self.logger.info(f"dataset has {len(encoded_input)} tokens")
@@ -248,7 +250,7 @@ class Training:
         except Exception as e:
             self.logger.error(f'meet exception {e} in the training...')
         finally:
-            save_checkpoint(self.model, self.opti, iterations, "model.pt")
+            save_checkpoint(self.model, self.opti, iterations, "output/model.pt")
             self.logger.info(f'saved the training output...')
 
 
