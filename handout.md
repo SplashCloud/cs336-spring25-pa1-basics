@@ -85,3 +85,22 @@ run step for 100 iterations
     - gradient vanishing
 - lr=1e3: loss decrease from 26.27 to inf(keep increasing, reach inf at iter#25)
     - gradient explosion
+
+## Training Experiment
+
+0. about function code
+- many functions have inefficient code, and lead to slow training
+    - such as, indexing, it can be done by some simple torch api, but i use the naive solution.
+
+1. encode corpus
+- single process is slow, so we need to use multi-process to deal it
+    - but I find that my host(20-cores, 5mins) is faster than the gpu server(128-cores, 16mins)
+2. training speed
+- the doc said that it takes about 1h and 22m to train 5000 steps in the cpu, but in my host, I need about 16h and 40m, and in the 4090 gpu server, it is also slow(maybe it's my code fault)
+    - I need to find why?
+3. about gradient vanish
+- the reason is a bug in cross-entropy computation, use the logit_norm[target], not logit[target].
+- Why?
+
+4. extend exploration
+- 

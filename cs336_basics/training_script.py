@@ -112,7 +112,7 @@ class Training:
         model_config = self.config["model_config"]
         assert model_config["name"] == "transformer"
         self.logger.info(f'using {model_config['device']}...')
-        self.model = Transformer(
+        model = Transformer(
             vocab_size=model_config["vocab_size"],
             d_embedding=model_config["d_embedding"],
             num_heads=model_config["num_heads"],
@@ -124,6 +124,7 @@ class Training:
             device=model_config["device"],
             dtype=model_config["dtype"]
         )
+        self.model = torch.compile(model) # speedup training by JIT-compiling
 
     def _setup_optimizer(self):
         assert "optimizer_config" in self.config.keys()
