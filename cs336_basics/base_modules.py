@@ -3,6 +3,8 @@ import torch
 import math
 from einops import einsum, reduce, rearrange
 
+from cs336_basics.inference.cache import KVCache
+
 
 def init_linear_weight(d_out: int, d_in: int, device = None, dtype = None) -> nn.Parameter:
     weight = torch.empty((d_out, d_in), device=device, dtype=dtype)
@@ -118,7 +120,8 @@ class RoPE(nn.Module):
 class MultiHeadSelfAttention(nn.Module):
 
     def __init__(self, d_embedding: int, d_attn: int,num_heads: int,
-                       theta: float = 0, max_seq_len: int = 0, device = None, dtype = None):
+                       theta: float = 0, max_seq_len: int = 0,
+                       device = None, dtype = None, index: int = 0):
         super().__init__()
         self.d_embedding = d_embedding
         self.d_attn = d_attn
@@ -127,6 +130,7 @@ class MultiHeadSelfAttention(nn.Module):
         self.d_v = d_attn // num_heads
         self.device = device
         self.dtype = dtype
+        self.index = index
 
         self.WQ = init_linear_weight(d_out=self.num_heads*self.d_k, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
         self.WK = init_linear_weight(d_out=self.num_heads*self.d_k, d_in=self.d_embedding, device=self.device, dtype=self.dtype)
@@ -137,7 +141,7 @@ class MultiHeadSelfAttention(nn.Module):
         if self.enable_rope:
             self.rope = RoPE(theta=theta, d_k=self.d_k, max_seq_len=max_seq_len, device=self.device)
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None, kv_cache: KVCache = None) -> torch.Tensor:
         assert x.shape[-1] == self.d_embedding # x.shape = (batch_size, ..., seq_len, d_embedding)
         Q = einsum(x, self.WQ, "... seq_len d_embedding, h_d_k d_embedding -> ... seq_len h_d_k")
         K = einsum(x, self.WK, "... seq_len d_embedding, h_d_k d_embedding -> ... seq_len h_d_k")
@@ -149,8 +153,21 @@ class MultiHeadSelfAttention(nn.Module):
             assert token_positions is not None
             Q = self.rope.forward(x=Q, token_positions=token_positions)
             K = self.rope.forward(x=K, token_positions=token_positions)
-        mask = torch.tril(torch.ones(x.shape[-2], x.shape[-2], device=x.device))
-        mask = mask.to(dtype=torch.bool)
+        if kv_cache is not None:
+            kv_cache.set(self.index, K, V, x.shape[-2])
+            if not kv_cache.is_prefill:
+                K = torch.cat([kv_cache.get_k(self.index), K], dim=-2)
+                V = torch.cat([kv_cache.get_v(self.index), V], dim=-2)
+        # Create causal mask
+        # In decode mode with KVCache, Q has length 1 but K has full history length
+        # The single query token should attend to all past tokens, so mask should be all True
+        if kv_cache is not None and not kv_cache.is_prefill:
+            # Decode mode: current token can see all past tokens
+            mask = torch.ones(Q.shape[-2], K.shape[-2], device=x.device, dtype=torch.bool)
+        else:
+            # Prefill mode or no cache: use causal mask
+            mask = torch.tril(torch.ones(Q.shape[-2], K.shape[-2], device=x.device))
+            mask = mask.to(dtype=torch.bool)
         Attn = scaled_dot_product_attention(Q, K, V, mask=mask)
         Attn = rearrange(Attn, "... head seq_len d_v -> ... seq_len (head d_v)")
         return einsum(Attn, self.WO, "... seq_len h_d_v, d_attn h_d_v -> ... seq_len d_attn")

@@ -2,6 +2,7 @@ import torch
 from typing import Dict
 from cs336_basics.base_modules import softmax
 from cs336_basics.config import DATA_DIR
+from cs336_basics.inference.cache import KVCache
 from cs336_basics.tokenizer import BPETokenizer
 from cs336_basics.train_modules import load_checkpoint
 from cs336_basics.transformer import Transformer
@@ -16,6 +17,7 @@ class InferenceEngine:
         self.max_length = inference_config.get("max_length", 0)
         self.temperature = inference_config.get("temperature", 0.0)
         self.topp = inference_config.get("top-p", 0.0)
+        self.kv_cache = None
         self._setup_model()
         self._setup_tokenizer()
 
@@ -23,14 +25,21 @@ class InferenceEngine:
         assert "model_config" in self.config.keys()
         model_config = self.config["model_config"]
         assert model_config["name"] == "transformer"
+        num_layers = model_config["num_layers"]
+        context_length = model_config["context_length"]
+        num_heads = model_config["num_heads"]
+        d_attn = model_config["d_model"]
+        if self.config["enable_kv_cache"]:
+            self.kv_cache = KVCache((2, num_layers, 1, num_heads, context_length, d_attn//num_heads),
+                                        dtype=self.dtype, device=self.device)
         self.model = Transformer(
             vocab_size=model_config["vocab_size"],
             d_embedding=model_config["d_embedding"],
-            num_heads=model_config["num_heads"],
-            d_attn=model_config["d_model"],
+            num_heads=num_heads,
+            d_attn=d_attn,
             d_ff=model_config["d_ff"],
-            num_layers=model_config["num_layers"],
-            context_length=model_config["context_length"],
+            num_layers=num_layers,
+            context_length=context_length,
             theta=model_config["theta"],
             device=self.device,
             dtype=self.dtype
@@ -50,19 +59,26 @@ class InferenceEngine:
         print(x, end='')
         encoded_input = self.tokenizer.encode(x)
         input_tensor = torch.Tensor(encoded_input).unsqueeze(0).to(device=self.device, dtype=torch.int64) # (bs, seq_len)
-        while input_tensor.size(1) < self.max_length:
+        output_len = input_tensor.size(1)
+        while output_len < self.max_length:
             next = self._decode(input_tensor)
             next_token = self.tokenizer.decode(next.to(dtype=torch.int64).flatten().tolist())
             print(next_token, end='')
             if next_token == '<|endoftext|>':
                 break
-            input_tensor = torch.cat([input_tensor, next], dim=-1)
+            if self.kv_cache is not None:
+                self.kv_cache.is_prefill = False
+                self.kv_cache.cached_seq_len += input_tensor.size(1)
+                input_tensor = next
+            else:
+                input_tensor = torch.cat([input_tensor, next], dim=-1)
+            output_len += 1
         print()
 
 
     def _decode(self, x: torch.Tensor) -> torch.Tensor:
         # x.shape = (bs, seq_len)
-        logit = self.model.forward(x)
+        logit = self.model.forward(x, self.kv_cache)
         output = softmax(logit, dim=-1) # shape = (bs, seq_len, vocab_size)
         prob = output[:,-1,:] # (bs, vocab_size)
         ids = torch.argmax(prob, dim=-1).unsqueeze(1) # shape = (bs, 1)
@@ -97,7 +113,8 @@ if __name__ == "__main__":
             "top-p": 0.0
         },
         "device": device,
-        "dtype": dtype
+        "dtype": dtype,
+        "enable_kv_cache": True,
     }
     inference = InferenceEngine(config)
     prompt = "Once upon a time there was a little boy"
