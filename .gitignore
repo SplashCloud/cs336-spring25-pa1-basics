@@ -167,3 +167,5 @@ data/
 *.out
 output/
 logs/
+
+uv.lock

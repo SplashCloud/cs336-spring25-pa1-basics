@@ -6,7 +6,7 @@ from cs336_basics.tokenizer import BPETokenizer
 from cs336_basics.train_modules import load_checkpoint
 from cs336_basics.transformer import Transformer
 
-class Inference:
+class InferenceEngine:
 
     def __init__(self, config: Dict):
         self.config = config
@@ -49,8 +49,7 @@ class Inference:
     def inference(self, x: str):
         print(x, end='')
         encoded_input = self.tokenizer.encode(x)
-        input_tensor = torch.Tensor(encoded_input).unsqueeze(0).to(device=self.device, dtype=torch.int64)
-        # print(input_tensor.size(1), self.max_length)
+        input_tensor = torch.Tensor(encoded_input).unsqueeze(0).to(device=self.device, dtype=torch.int64) # (bs, seq_len)
         while input_tensor.size(1) < self.max_length:
             next = self._decode(input_tensor)
             next_token = self.tokenizer.decode(next.to(dtype=torch.int64).flatten().tolist())
@@ -100,6 +99,6 @@ if __name__ == "__main__":
         "device": device,
         "dtype": dtype
     }
-    inference = Inference(config)
+    inference = InferenceEngine(config)
     prompt = "Once upon a time there was a little boy"
     inference.inference(prompt)
